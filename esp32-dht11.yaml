@@ -1,0 +1,129 @@
+esphome:
+  name: name
+
+esp32:
+  board: esp32doit-devkit-v1
+  framework:
+    type: esp-idf
+
+# Reduce memory usage
+logger:
+  level: WARN
+
+api:
+  password: "testing"
+
+ota:
+- platform: "esphome"
+  password: "testing"
+
+# Status LED
+output:
+  - platform: gpio
+    pin: GPIO2
+    id: status_led_output
+
+light:
+  - platform: binary
+    name: "Status LED"
+    id: status_led
+    output: status_led_output
+    internal: true
+
+wifi:
+  networks:
+    - ssid: ""
+      password: ""
+
+  on_connect:
+    then:
+      - logger.log: "WiFi connected"
+      - lambda: |-
+          id(led_error_state) = false;
+
+  on_disconnect:
+    then:
+      - logger.log: "WiFi disconnected"
+      - lambda: |-
+          id(led_error_state) = true;
+
+  ap:
+    ssid: "Fallback Hotspot"
+    password: "llnDapo0emZw"
+
+captive_portal:
+
+globals:
+  - id: led_error_state
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+sensor:
+  - platform: dht
+    pin: GPIO18
+    model: DHT11
+    update_interval: 3s
+    temperature:
+      name: "Room Temperature"
+      id: room_temp
+      filters:
+        - lambda: |-
+            if (isnan(x)) {
+              return 0.0;
+            } else {
+              return x;
+            }
+      on_value:
+        then:
+          - if:
+              condition:
+                and:
+                  - wifi.connected:
+                  - lambda: 'return !id(led_error_state);'
+              then:
+                - light.turn_on: status_led
+                - delay: 100ms
+                - light.turn_off: status_led
+
+    humidity:
+      name: "Room Humidity"
+      id: room_humidity
+      filters:
+        - lambda: |-
+            if (isnan(x)) {
+              return 0.0;
+            } else {
+              return x;
+            }
+
+binary_sensor:
+  - platform: status
+    name: "ESP Status"
+
+  - platform: template
+    name: "Sensor Connectivity"
+    id: sensor_connectivity
+    device_class: connectivity
+    lambda: |-
+      bool sensor_ok = !(id(room_temp).state == 0.0 && id(room_humidity).state == 0.0);
+      id(led_error_state) = !sensor_ok;
+      return sensor_ok;
+
+interval:
+  - interval: 75ms
+    then:
+      - lambda: |-
+          static uint32_t last_blink = 0;
+          uint32_t now = millis();
+
+          if (id(led_error_state)) {
+            if (now - last_blink >= 75) {
+              id(status_led).toggle();
+              last_blink = now;
+            }
+          } else {
+            if (id(status_led).current_values.is_on() && (now - last_blink >= 200)) {
+              id(status_led).turn_off();
+            }
+          }
